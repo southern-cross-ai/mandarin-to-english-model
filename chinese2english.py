@@ -1,3 +1,4 @@
+# Importing necessary libraries.
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
 from typing import List
@@ -17,7 +18,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Set seed.
+# Setting a deterministic seed for reproducibility across multiple runs.
 seed = 42
 np.random.seed(seed)
 torch.manual_seed(seed)
@@ -25,9 +26,9 @@ torch.cuda.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 
+# Language codes and model settings.
 SRC_LANGUAGE = 'zh'
 TGT_LANGUAGE = 'en'
-
 EMB_SIZE = 192
 NHEAD = 8
 FFN_HID_DIM = 192
@@ -38,26 +39,29 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_EPOCHS = 10
 
 
+# Tokenization function for Chinese using jieba library.
 def jieba_tokenizer(text):
     return list(jieba.cut(text))
 
 
+# Tokenization settings for source and target languages.
 token_transform = {
     SRC_LANGUAGE: jieba_tokenizer,
     TGT_LANGUAGE: get_tokenizer('spacy', language='en_core_web_sm')
 }
 
-vocab_transform = {}
+nsform = {}
 
+# Reading the dataset from JSON file.
 csv = pd.read_json('translation2019zh/translation2019zh_train.json', lines=True)
-
 csv.head()
 
-train_csv, remaining_csv = train_test_split(csv, test_size=0.96)
-test_csv, _ = train_test_split(remaining_csv, test_size=0.995)
+# Splitting the dataset into training and validation subsets.
+train_csv, remaining_csv = train_test_split(csv, test_size=0.935)
+test_csv, _ = train_test_split(remaining_csv, test_size=0.993)
 
 
-# Custom Dataset class.
+# Dataset class to handle loading of data.
 class TranslationDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -72,9 +76,11 @@ class TranslationDataset(Dataset):
         )
 
 
+# Creating dataset objects.
 train_dataset = TranslationDataset(train_csv)
 valid_dataset = TranslationDataset(test_csv)
 
+# Iterator to display an example data pair.
 iterator = iter(train_dataset)
 print(next(iterator))
 
@@ -90,7 +96,7 @@ UNK_IDX, PAD_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
 # Make sure the tokens are in order of their indices to properly insert them in vocab.
 special_symbols = ["<bos>", "<eos>", "<pad>", "<unk>"]
 
-# Assuming train_csv is a DataFrame with 'chinese' and 'english' columns
+# Vocabulary building from the training set for both languages.
 for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
     column_name = {'zh': 'chinese', 'en': 'english'}
     vocab_transform[ln] = build_vocab_from_iterator(
@@ -104,11 +110,12 @@ for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
 vocab_transform[SRC_LANGUAGE].set_default_index(UNK_IDX)
 vocab_transform[TGT_LANGUAGE].set_default_index(UNK_IDX)
 
+# Size of source and target vocabularies.
 SRC_VOCAB_SIZE = len(vocab_transform[SRC_LANGUAGE])
 TGT_VOCAB_SIZE = len(vocab_transform[TGT_LANGUAGE])
 
 
-# helper function to club together sequential operations
+# Sequential operations for text transformation including tokenization and numericalization.
 def sequential_transforms(*transforms):
     def func(txt_input):
         for transform in transforms:
@@ -118,7 +125,7 @@ def sequential_transforms(*transforms):
     return func
 
 
-# function to add BOS/EOS and create tensor for input sequence indices
+# Adding special tokens and converting sequence to tensor.
 def tensor_transform(token_ids: List[int]):
     return torch.cat((torch.tensor([BOS_IDX]),
                       torch.tensor(token_ids),
@@ -133,7 +140,7 @@ for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
                                                tensor_transform)  # Add BOS/EOS and create tensor
 
 
-# function to collate data samples into batch tensors
+# Collate function to pad data samples into batch tensors.
 def collate_fn(batch):
     src_batch, tgt_batch = [], []
     for src_sample, tgt_sample in batch:
@@ -144,6 +151,7 @@ def collate_fn(batch):
     return src_batch, tgt_batch
 
 
+# Generating masks for Transformer.
 def generate_square_subsequent_mask(sz):
     mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
@@ -161,6 +169,7 @@ def create_mask(src, tgt):
 
 
 
+# Positional encoding and token embedding for Transformer.
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout, max_len=5000):
         """
@@ -179,13 +188,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        """
-        Inputs of forward function
-        :param x: the sequence fed to the positional encoder model (required).
-        Shape:
-            x: [sequence length, batch size, embed dim]
-            output: [sequence length, batch size, embed dim]
-        """
+
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
@@ -275,6 +278,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.98), ep
 train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, collate_fn=collate_fn)
 
 
+# Training and validation loss functions.
 def train_epoch(model, optimizer):
     print('Training')
     model.train()
@@ -337,7 +341,7 @@ def evaluate(model):
         losses += loss.item()
     return losses / len(list(val_dataloader))
 
-
+# Main training loop.
 train_loss_list, valid_loss_list = [], []
 for epoch in range(1, NUM_EPOCHS + 1):
     start_time = timer()
@@ -351,12 +355,8 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
 os.makedirs('outputs', exist_ok=True)
 
-
+# Plotting training and validation loss.
 def save_plots(train_loss, valid_loss):
-    """
-    Function to save the loss plots to disk.
-    """
-    # Loss plots.
     plt.figure(figsize=(10, 7))
     plt.plot(
         train_loss, color='blue', linestyle='-',
@@ -372,11 +372,11 @@ def save_plots(train_loss, valid_loss):
     plt.savefig(os.path.join('outputs', 'loss.png'))
     plt.show()
 
-
+# Saving the model and vocabularies.
 save_plots(train_loss_list, valid_loss_list)
 torch.save(model, 'outputs/model.pth')
-torch.save(src_vocab, 'outputs/src_vocab.pth')
-torch.save(tgt_vocab, 'outputs/tgt_vocab.pth')
+torch.save(vocab_transform[SRC_LANGUAGE], 'outputs/src_vocab.pth')
+torch.save(vocab_transform[TGT_LANGUAGE], 'outputs/tgt_vocab.pth')
 
 model = torch.load('outputs/model.pth')
 
@@ -405,7 +405,7 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
     return ys
 
 
-# Translation function.
+# Translation utility.
 def translate(model: torch.nn.Module, src_sentence: str):
     model.eval()
     src = text_transform[SRC_LANGUAGE](src_sentence).view(1, -1)
@@ -420,11 +420,11 @@ def translate(model: torch.nn.Module, src_sentence: str):
 
 # SRC, GT pairs from the validation set.
 infer_sentences = [
-    ["拿走他的收入，毫无疑问就是盗窃。", "So to take it from him is by definition theft."],
+    ["55岁以上的女人们对自己伴侣更为挑剔。", "Women over 55 are pickier about their partners than at any other time in their lives."],
     ["时间是一个主轴，所以我必须解决其中心。", "Time is a spindle so I must resolve its center."],
-    ["那座城镇在一群游击队员控制之下。", "The town lies within the control of a group of guerrillas."],
+    ["他看得出我并非只是说说而已，于是拿起他的皮衣走了。", "He could see I meant what I said. So he took his fur coat and left."],
     ["但是在太空上面应该怎么办呢?", "But how does that work in space?"],
-    ["镇痛剂由于本身的成瘾性及毒副反应，在一定程度上限制了使用", "Application of analgesics is limited by its addiction and side effects."]
+    ["大连是中国最美丽的城市之一。", "Dalian is one of the most beautiful cities in China."]
 ]
 for sentence in infer_sentences:
     print(f"SRC: {sentence[0]}")
